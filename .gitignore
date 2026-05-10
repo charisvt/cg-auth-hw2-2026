@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+.venv/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Generated frames
+frames_demo1/
+frames_demo2/
+
+# Spec/notes PDFs
+gr-notes2025 v1.0.pdf
+hw2_2026.pdf
+
+# Scratch files
+test_frame.png
+sphere.obj
