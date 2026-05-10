@@ -1,0 +1,274 @@
+\documentclass{article}
+
+\usepackage{listings}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{greek}
+\setotherlanguage{english}
+\setmainfont{FreeSerif}
+\setmonofont{FreeMono}
+\usepackage[a4paper,top=2cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+\usepackage{float}
+\usepackage{xcolor}
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\title{Εργασία \#2: Μετασχηματισμοί και Προβολές}
+\author{Βογιατζής Χαρίσιος ΑΕΜ:9192}
+
+\lstset{frame=tb,
+  language=Python,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\href{https://github.com/charisvt/cg-auth-hw2-2026}{github.com/charisvt/cg-auth-hw2-2026}
+\end{center}
+
+\begin{abstract}
+Σκοπός της εργασίας είναι η υλοποίηση του pipeline προβολής τρισδιάστατων αντικειμένων σε
+δισδιάστατη εικόνα, καθώς και η παραγωγή δύο animations: ένα με στατική κάμερα και
+περιστρεφόμενο αντικείμενο, και ένα με κάμερα που τροχιάζει γύρω από ένα στατικό αντικείμενο.
+\end{abstract}
+
+% -----------------------------------------------------------------------
+\section{Δομή κώδικα και τρόπος κλήσης}
+
+Ο κώδικας οργανώνεται στα παρακάτω αρχεία:
+\begin{itemize}
+  \item \texttt{transformations.py} --- κλάση \texttt{Trafo} και συναρτήσεις
+        \texttt{lookat}, \texttt{perspective\_project}, \texttt{rasterize},
+        \texttt{render\_object}.
+  \item \texttt{renderer.py} --- βοηθητικές συναρτήσεις Gouraud shading από
+        την εργασία \#1 (\texttt{vector\_interp}, \texttt{g\_shading}).
+  \item \texttt{demo1.py} --- παράγει 25 frames με στατική κάμερα και
+        περιστρεφόμενο αντικείμενο.
+  \item \texttt{demo2.py} --- παράγει 25 frames με κινούμενη κάμερα γύρω από
+        το στατικό αντικείμενο.
+\end{itemize}
+
+Εκτέλεση των demos (απαιτείται Python $\geq$ 3.12, τα frames αποθηκεύονται στους
+φακέλους \texttt{frames\_demo1/} και \texttt{frames\_demo2/} αντίστοιχα):
+\begin{lstlisting}
+python demo1.py
+python demo2.py
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Κλάση \texttt{Trafo}}
+
+Η κλάση \texttt{Trafo} υλοποιεί έναν affine μετασχηματισμό (περιστροφή + μετατόπιση)
+μέσω ενός $3\times3$ πίνακα περιστροφής \texttt{rot\_mat} και ενός διανύσματος
+μετατόπισης \texttt{t\_vec}.
+
+\subsection{\texttt{translate}}
+Προσθέτει το δοθέν διάνυσμα στο \texttt{t\_vec}:
+\begin{lstlisting}
+def translate(self, t_vec: np.ndarray) -> None:
+    self.t_vec = self.t_vec + t_vec
+\end{lstlisting}
+
+\subsection{\texttt{rotate}}
+Υπολογίζει τον πίνακα περιστροφής με τον τύπο Rodrigues (σχ. 5.45 σημειώσεων) για
+περιστροφή γωνίας $a$ γύρω από μοναδιαίο άξονα $\mathbf{u} = [u_x, u_y, u_z]^\top$:
+\[
+\mathbf{R} = (1-\cos a)
+\begin{bmatrix} u_x^2 & u_x u_y & u_x u_z \\ u_y u_x & u_y^2 & u_y u_z \\ u_z u_x & u_z u_y & u_z^2 \end{bmatrix}
++ \cos a\, \mathbf{I}_{3\times3}
++ \sin a
+\begin{bmatrix} 0 & -u_z & u_y \\ u_z & 0 & -u_x \\ -u_y & u_x & 0 \end{bmatrix}
+\]
+Επειδή ο άξονας διέρχεται από το \texttt{center}, το \texttt{t\_vec}
+περιστρέφεται ως προς αυτό πριν ενημερωθεί:
+\begin{lstlisting}
+self.t_vec   = np.dot(R_new, self.t_vec - center) + center
+self.rot_mat = np.dot(R_new, self.rot_mat)
+\end{lstlisting}
+
+\subsection{\texttt{xform\_pnts}}
+Εφαρμόζει τον affine μετασχηματισμό στα σημεία εισόδου ($3\times N$):
+\begin{lstlisting}
+def xform_pnts(self, pts: np.ndarray) -> np.ndarray:
+    return np.dot(self.rot_mat, pts) + self.t_vec[:, np.newaxis]
+\end{lstlisting}
+
+\subsection{\texttt{sys2sys}}
+Το \texttt{sys\_src} $\in\mathbb{R}^{3\times3}$ είναι ο πίνακας περιστροφής
+που ορίζει το σύστημα συντεταγμένων πηγής (αντίστοιχο της περίπτωσης 2 της
+§5.4.3 σημειώσεων), ενώ \texttt{pts} είναι τα σημεία εκφρασμένα σε αυτό.
+Η μετατροπή γίνεται σε δύο βήματα: πηγή $\to$ WCS, στη συνέχεια WCS $\to$
+σύστημα προορισμού ($R^{-1}=R^\top$ για ορθογώνιο $R$):
+\begin{lstlisting}
+pts_world = np.dot(sys_src, pts)
+return np.dot(self.rot_mat.T, pts_world - self.t_vec[:, np.newaxis])
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Συνάρτηση \texttt{lookat}}
+
+Υπολογίζει τον πίνακα $R \in \mathbb{R}^{3\times3}$ και το διάνυσμα
+$\mathbf{t} \in \mathbb{R}^3$ που μετασχηματίζουν σημεία από το WCS στο σύστημα
+της κάμερας (§6.3.1--6.3.2 σημειώσεων). Με $C = \mathtt{eye}$, $K = \mathtt{target}$,
+$\mathbf{u} = \mathtt{up}$:
+
+\begin{enumerate}
+  \item $\hat{z}_c = \dfrac{\overrightarrow{CK}}{|\overrightarrow{CK}|}$ \quad (άξονας φακού, εξ. 6.6)
+  \item $\mathbf{t} = \mathbf{u} - \langle\mathbf{u},\hat{z}_c\rangle\hat{z}_c,\quad
+        \hat{y}_c = \dfrac{\mathbf{t}}{|\mathbf{t}|}$ \quad (διόρθωση up, εξ. 6.7)
+  \item $\hat{x}_c = \hat{y}_c \times \hat{z}_c$ \quad (εξ. 6.8)
+  \item $R = \begin{bmatrix}\hat{x}_c^\top\\\hat{y}_c^\top\\\hat{z}_c^\top\end{bmatrix}, \quad
+        \mathbf{t} = -R\,C$ \quad (εξ. 6.11, 6.13)
+\end{enumerate}
+
+Ο $R$ έχει τα διανύσματα βάσης της κάμερας ως γραμμές (ισοδύναμο με τον $R^\top$
+των σημειώσεων όπου τα διανύσματα βάσης είναι στήλες). Τα σημεία μπροστά από
+την κάμερα έχουν $Z_c > 0$.
+
+\begin{lstlisting}
+R = np.array([right, up_cam, forward])
+t = -np.dot(R, eye)
+return R, t
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Συνάρτηση \texttt{perspective\_project}}
+
+Μετασχηματίζει τα σημεία στο σύστημα της κάμερας και εφαρμόζει την
+προοπτική προβολή pinhole (§6.2.1, εξ. 6.2 σημειώσεων):
+\[
+p_c = R\,p + \mathbf{t}, \qquad
+x_q = w\,\frac{x_p}{z_p}, \quad y_q = w\,\frac{y_p}{z_p}
+\]
+όπου $w$ είναι η απόσταση κέντρου προβολής -- πετάσματος. Επιστρέφει τις
+2D προβολές και το βάθος $z_p$ για την ταξινόμηση κατά βάθος.
+
+\begin{lstlisting}
+p_cam  = np.dot(R, pts) + t[:, np.newaxis]
+depth  = p_cam[2]
+pts_2d = focal * p_cam[:2] / p_cam[2:3]
+return pts_2d, depth
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Συνάρτηση \texttt{rasterize}}
+
+Μετατρέπει τις 2D συντεταγμένες από το επίπεδο πετάσματος
+($[-w/2, w/2]\times[-h/2, h/2]$) σε pixel εικόνας. Ο άξονας της κάμερας
+αντιστοιχεί στο κέντρο της εικόνας, ενώ ο $y$ αντιστρέφεται επειδή η
+αρίθμηση ξεκινά από την πάνω αριστερή γωνία:
+\[
+x_{px} = \left(\frac{x}{w} + 0.5\right)w_{res}, \qquad
+y_{px} = \left(0.5 - \frac{y}{h}\right)h_{res}
+\]
+
+\begin{lstlisting}
+x_pix = (pts_2d[0] / plane_w + 0.5) * res_w
+y_pix = (0.5 - pts_2d[1] / plane_h) * res_h
+return np.round(np.stack([x_pix, y_pix], axis=1)).astype(int)
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Συνάρτηση \texttt{render\_object}}
+
+Υλοποιεί το πλήρες pipeline απεικόνισης: \texttt{lookat} $\to$
+\texttt{perspective\_project} $\to$ \texttt{rasterize} $\to$ \texttt{g\_shading}.
+Τα τρίγωνα ταξινομούνται από πίσω προς τα μπρος βάσει του μέσου βάθους
+των κορυφών τους (Painter's Algorithm), και για κάθε τρίγωνο καλείται η
+\texttt{g\_shading} από την εργασία \#1.
+
+\begin{lstlisting}
+img = np.ones((res_h, res_w, 3), dtype=np.float64)
+avg_depth = np.mean(depth[t_pos_idx], axis=1)
+order = np.argsort(avg_depth)[::-1]
+
+for idx in order:
+    face = t_pos_idx[idx]
+    img = g_shading(img, vertices_px[face], v_clr[face])
+
+return img
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Demos}
+
+Και τα δύο demos φορτώνουν τις παραμέτρους από το αρχείο \texttt{data.npy}
+(κάμερα, αντικείμενο, παράμετροι animation). Τα χρώματα των κορυφών
+(\texttt{v\_clr}) προκύπτουν με δειγματοληψία της εικόνας texture
+\texttt{loony-repeat.png} στις UV συντεταγμένες κάθε κορυφής.
+Κάθε demo παράγει 25 frames ($25\,\text{fps} \times 1\,\text{sec}$).
+
+\subsection{Demo 1 --- Στατική κάμερα, περιστρεφόμενο αντικείμενο}
+Για κάθε frame $i$ δημιουργείται νέο \texttt{Trafo} με γωνία
+$\theta = 2\pi i/25$ γύρω από τον άξονα $Y$ (κέντρο αρχή αξόνων).
+Η κάμερα παραμένει σταθερή:
+\begin{lstlisting}
+trafo = Trafo()
+trafo.rotate(np.array([0.0, 1.0, 0.0]), angle, np.array([0.0, 0.0, 0.0]))
+v_pos_rot = trafo.xform_pnts(v_pos)
+img = render_object(v_pos_rot, v_clr, t_pos_idx, ...)
+\end{lstlisting}
+
+\subsection{Demo 2 --- Περιστρεφόμενη κάμερα, στατικό αντικείμενο}
+Η κάμερα κινείται σε κύκλο ακτίνας \texttt{k\_cam\_radius} στο επίπεδο
+$XZ$, κοιτώντας πάντα το αντικείμενο. Η δεξιόστροφη περιστροφή (ως προς
+$+Y$) εφαρμόζεται με $R_y(-\theta)$:
+\[
+x' = x_0\cos\theta - z_0\sin\theta, \qquad z' = x_0\sin\theta + z_0\cos\theta
+\]
+\begin{lstlisting}
+cam_eye = np.array([x0*ct - z0*st, y0, x0*st + z0*ct])
+img = render_object(v_pos, v_clr, t_pos_idx, ..., eye=cam_eye, ...)
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Αποτελέσματα}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.45\textwidth]{frames_demo1/frame_000.png}
+\includegraphics[width=0.45\textwidth]{frames_demo1/frame_006.png}
+\caption{Demo 1 --- frames 0 και 6 (περιστροφή αντικειμένου, στατική κάμερα).}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.45\textwidth]{frames_demo2/frame_000.png}
+\includegraphics[width=0.45\textwidth]{frames_demo2/frame_006.png}
+\caption{Demo 2 --- frames 0 και 6 (περιστροφή κάμερας, στατικό αντικείμενο).}
+\end{figure}
+
+% -----------------------------------------------------------------------
+\section{Δημιουργία video από τα frames}
+
+Τα αποθηκευμένα frames μπορούν να συνδυαστούν σε βίντεο με \texttt{ffmpeg}:
+\begin{lstlisting}
+ffmpeg -r 25 -i frames_demo1/frame_%03d.png -vcodec libx264 demo1.mp4
+ffmpeg -r 25 -i frames_demo2/frame_%03d.png -vcodec libx264 demo2.mp4
+\end{lstlisting}
+
+% -----------------------------------------------------------------------
+\section{Κώδικας}
+Μπορείτε να βρείτε τον κώδικα και τα αποτελέσματα στο \href{https://github.com/charisvt/cg-auth-hw2-2026}{Github}.
+
+\end{document}
